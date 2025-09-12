@@ -23,6 +23,12 @@ echo "🧹 Aggressive cleanup..."
 docker system prune -af --volumes &>/dev/null || true
 sudo rm -rf frontend/node_modules frontend/dist backend/__pycache__ &>/dev/null || true
 sudo rm -rf /tmp/* /var/cache/apt/* &>/dev/null || true
+
+# Clean nginx served files and cache
+echo "   Cleaning nginx cache..."
+sudo rm -rf /var/www/html/* 2>/dev/null || true
+sudo systemctl reload nginx 2>/dev/null || true
+
 echo "📊 Disk: $(df -h . | tail -1 | awk '{print $4}')"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -40,29 +46,56 @@ fi
 
 cd frontend
 
-# Set environment variables for HTTPS domain
+# Set environment variables for HTTPS domain  
 export VITE_API_BASE_URL="https://$DOMAIN/api/v1"
 export VITE_AWS_REGION="us-west-2"
 export VITE_AWS_COGNITO_USER_POOL_ID="us-west-2_bdCwF60ZI"
 export VITE_AWS_COGNITO_APP_CLIENT_ID="4i9hrd7srgbqbtun09p43ncfn0"
 
+echo "   Environment variables set:"
+echo "     VITE_API_BASE_URL=$VITE_API_BASE_URL"
+echo "     DOMAIN=$DOMAIN"
+
 # Build with memory optimization
 echo "   npm install..."
-NODE_OPTIONS='--max-old-space-size=512' npm install --prefer-offline &>/dev/null
+if NODE_OPTIONS='--max-old-space-size=512' npm install --prefer-offline; then
+    echo "   ✅ npm install successful"
+else
+    echo "   ❌ npm install failed"
+    exit 1
+fi
 
-echo "   npm build..."
-NODE_OPTIONS='--max-old-space-size=512' npm run build &>/dev/null
+echo "   npm build (with detailed output)..."
+if NODE_OPTIONS='--max-old-space-size=512' npm run build; then
+    echo "   ✅ npm build successful"
+else
+    echo "   ❌ npm build failed"
+    npm run build  # Show errors
+    exit 1
+fi
+
+# Show build details
+echo "   📊 Build results:"
+echo "     Frontend size: $(du -sh dist 2>/dev/null || echo 'unknown')"
+echo "     Files in dist: $(ls -la dist/ | wc -l) files"
+echo "     Index.html exists: $([ -f 'dist/index.html' ] && echo 'YES' || echo 'NO')"
+
+# Check what API URL was actually built into the frontend
+echo "   🔍 Checking built API URL..."
+if [ -f "dist/index.html" ]; then
+    # Look for API base URL in built files
+    grep -r "api/v1" dist/ | head -2 || echo "     No API URLs found in built files"
+else
+    echo "     ❌ dist/index.html not found"
+    ls -la dist/ 2>/dev/null || echo "     dist directory missing"
+    exit 1
+fi
 
 # Clean up immediately
 rm -rf node_modules &>/dev/null || true
 npm cache clean --force &>/dev/null || true
 
-if [ ! -f "dist/index.html" ]; then
-    echo "❌ Frontend build failed"
-    exit 1
-fi
-
-echo "   ✅ Frontend built"
+echo "   ✅ Frontend built and verified"
 cd ..
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -447,17 +480,29 @@ fi
 echo ""
 echo "📊 DEBUGGING INFORMATION"
 echo "======================"
+
+echo "   📋 Frontend served by nginx:"
+echo "     Files in nginx root: $(sudo find $(pwd)/frontend/dist -type f 2>/dev/null | wc -l) files"
+echo "     Index.html timestamp: $(stat -c '%y' frontend/dist/index.html 2>/dev/null || echo 'not found')"
+echo "     Sample JS file content (looking for API URLs):"
+sudo find $(pwd)/frontend/dist -name "*.js" -exec head -1 {} \; 2>/dev/null | head -2 || echo "     No JS files found"
+
+echo "   📋 Nginx serving test:"
+curl -s -I https://localhost/ | head -3 || echo "   HTTPS not responding"
+curl -s -I http://localhost/ | head -3 || echo "   HTTP not responding" 
+
+echo "   📋 API endpoints test:"
+echo "     Backend direct: $(curl -s http://localhost:8000/api/v1/ | grep -o '"[^"]*"' | head -3 | tr '\n' ' ')"
+echo "     Through nginx: $(curl -s -k https://localhost/api/v1/ | grep -o '"[^"]*"' | head -3 | tr '\n' ' ' 2>/dev/null || echo 'Failed')"
+
+echo "   📋 Django logs from container (last 8 lines):"
+docker-compose -f docker-compose.simple.yml logs backend | tail -8
+
 echo "   📋 Nginx API logs (last 5 lines):"
 sudo tail -5 /var/log/nginx/api_access.log 2>/dev/null || echo "   No API access logs yet"
 
 echo "   📋 Nginx error logs (last 5 lines):"
 sudo tail -5 /var/log/nginx/error.log 2>/dev/null || echo "   No nginx error logs"
-
-echo "   📋 Django logs from container (last 5 lines):"
-docker-compose -f docker-compose.simple.yml logs backend | tail -5
-
-echo "   📋 Active nginx configuration:"
-sudo nginx -T 2>/dev/null | grep -A 10 -B 5 "location /api/" || echo "   Could not read nginx config"
 
 echo ""
 echo "💡 DEBUGGING COMMANDS:"
