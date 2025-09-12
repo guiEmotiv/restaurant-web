@@ -128,22 +128,54 @@ if ! command -v nginx &>/dev/null; then
     sudo apt-get install -y nginx
 fi
 
-# Start nginx for SSL certificate generation
-sudo nginx -t && sudo systemctl reload nginx
+# Check nginx status and start/reload properly
+echo "   Checking nginx status..."
+if systemctl is-active --quiet nginx; then
+    echo "   Nginx is running, reloading configuration..."
+    sudo systemctl reload nginx
+else
+    echo "   Nginx is stopped, starting nginx..."
+    sudo systemctl start nginx
+    sudo systemctl enable nginx
+fi
 
-# Generate SSL certificate
+echo "   Nginx status: $(systemctl is-active nginx)"
+
+# Create webroot directory for certbot
+sudo mkdir -p /var/www/html
+sudo chown www-data:www-data /var/www/html
+
+# Generate SSL certificate with verbose output
 echo "   Generating SSL certificate..."
-sudo certbot certonly --webroot \
+echo "   Domain: $DOMAIN"
+echo "   Alternative domain: xn--elfogndedonsoto-zrb.com"
+
+if sudo certbot certonly --webroot \
     -w /var/www/html \
     -d $DOMAIN \
     -d xn--elfogndedonsoto-zrb.com \
     --non-interactive \
     --agree-tos \
-    --email admin@$DOMAIN \
-    --quiet || echo "⚠️ Certificate generation failed, continuing..."
+    --email admin@$DOMAIN; then
+    echo "   ✅ SSL certificate generated successfully"
+    SSL_CERT_OK=true
+else
+    echo "   ⚠️ SSL certificate generation failed"
+    echo "   Checking if certificates already exist..."
+    if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+        echo "   ✅ Existing certificate found, continuing..."
+        SSL_CERT_OK=true
+    else
+        echo "   ❌ No certificate found, will continue without SSL"
+        SSL_CERT_OK=false
+    fi
+fi
 
-# Create full nginx config with SSL
-sudo tee /etc/nginx/conf.d/restaurant.conf > /dev/null <<EOF
+# Create full nginx config (conditional SSL)
+echo "   Creating nginx configuration..."
+if [ "$SSL_CERT_OK" = true ]; then
+    echo "   Using HTTPS configuration"
+    sudo tee /etc/nginx/conf.d/restaurant.conf > /dev/null <<EOF
 # HTTP redirect to HTTPS
 server {
     listen 80;
@@ -202,49 +234,143 @@ server {
     }
 }
 EOF
+else
+    echo "   Using HTTP-only configuration"
+    sudo tee /etc/nginx/conf.d/restaurant.conf > /dev/null <<EOF
+# HTTP server (no SSL)
+server {
+    listen 80;
+    server_name $DOMAIN xn--elfogndedonsoto-zrb.com $SERVER_IP;
+    
+    # Frontend - Serve React app
+    location / {
+        root $(pwd)/frontend/dist;
+        index index.html;
+        try_files \$uri \$uri/ /index.html;
+        
+        # Security headers
+        add_header X-Frame-Options DENY;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+    }
+    
+    # Backend API proxy
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+    
+    # Django Admin
+    location /admin/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+    
+    # Static files
+    location /static/ {
+        alias $(pwd)/backend/staticfiles/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+EOF
+fi
 
-# Test and reload nginx
-sudo nginx -t && sudo systemctl reload nginx
+# Test and reload nginx with detailed output
+echo "   Testing nginx configuration..."
+if sudo nginx -t; then
+    echo "   ✅ Nginx configuration is valid"
+    echo "   Reloading nginx..."
+    if sudo systemctl reload nginx; then
+        echo "   ✅ Nginx reloaded successfully"
+    else
+        echo "   ⚠️ Nginx reload failed, restarting..."
+        sudo systemctl restart nginx
+        echo "   Nginx status after restart: $(systemctl is-active nginx)"
+    fi
+else
+    echo "   ❌ Nginx configuration test failed"
+    echo "   Configuration file contents:"
+    sudo cat /etc/nginx/conf.d/restaurant.conf
+fi
 
 # Stop the Docker nginx container (we're using system nginx now)
-docker-compose -f docker-compose.simple.yml stop nginx
+echo "   Stopping Docker nginx container..."
+docker-compose -f docker-compose.simple.yml stop nginx 2>/dev/null || true
 
-echo "   ✅ SSL configured"
+if [ "$SSL_CERT_OK" = true ]; then
+    echo "   ✅ SSL configured with nginx"
+else
+    echo "   ✅ HTTP configured with nginx (no SSL)"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ✅ VERIFICATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-echo "✅ Checking..."
+echo "✅ Detailed verification..."
 
-# Backend check
+# Show current services status
+echo "   📊 Docker containers:"
+docker-compose -f docker-compose.simple.yml ps
+
+echo "   📊 System nginx status:"
+systemctl status nginx --no-pager -l
+
+echo "   📊 Port usage:"
+sudo netstat -tlnp | grep ":80\|:443\|:8000" || echo "   No processes found on ports 80, 443, 8000"
+
+# Backend check with detailed output
+echo "   🔍 Testing backend..."
 if curl -s http://localhost:8000/api/v1/health/ &>/dev/null; then
-    echo "✅ Backend OK"
+    echo "   ✅ Backend responding at localhost:8000"
     BACKEND_OK=true
 else
-    echo "❌ Backend failed"
-    docker-compose -f docker-compose.simple.yml logs backend | tail -5
+    echo "   ❌ Backend not responding"
+    echo "   Backend logs (last 10 lines):"
+    docker-compose -f docker-compose.simple.yml logs backend | tail -10
     BACKEND_OK=false
 fi
 
-# Frontend check via HTTPS
-if curl -s -k https://localhost/ &>/dev/null && [ -f "frontend/dist/index.html" ]; then
-    echo "✅ Frontend OK (HTTPS)"
-    FRONTEND_OK=true
-elif curl -s http://localhost/ &>/dev/null; then
-    echo "⚠️ Frontend OK (HTTP only)"
-    FRONTEND_OK=true
+# Frontend check with detailed output
+echo "   🔍 Testing frontend..."
+if [ -f "frontend/dist/index.html" ]; then
+    echo "   ✅ Frontend files exist"
+    if curl -s -k https://localhost/ &>/dev/null; then
+        echo "   ✅ Frontend accessible via HTTPS"
+        FRONTEND_OK=true
+    elif curl -s http://localhost/ &>/dev/null; then
+        echo "   ✅ Frontend accessible via HTTP"
+        FRONTEND_OK=true
+    else
+        echo "   ❌ Frontend not accessible"
+        echo "   Nginx error log (last 5 lines):"
+        sudo tail -5 /var/log/nginx/error.log 2>/dev/null || echo "   No nginx error log found"
+        FRONTEND_OK=false
+    fi
 else
-    echo "❌ Frontend issue"
+    echo "   ❌ Frontend dist files missing"
     FRONTEND_OK=false
 fi
 
-# SSL check
+# SSL check with details
+echo "   🔍 Checking SSL..."
 if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    echo "✅ SSL Certificate OK"
+    echo "   ✅ SSL Certificate found"
+    echo "   Certificate expires: $(sudo openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem 2>/dev/null | cut -d= -f2 || echo 'Unable to read expiry')"
     SSL_OK=true
 else
-    echo "⚠️ SSL Certificate not found"
+    echo "   ⚠️ SSL Certificate not found"
+    echo "   Let's Encrypt directory contents:"
+    sudo ls -la /etc/letsencrypt/live/ 2>/dev/null || echo "   No certificates directory found"
     SSL_OK=false
 fi
 
