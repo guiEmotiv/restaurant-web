@@ -101,10 +101,13 @@ fi
 echo "   Stopping nginx container temporarily..."
 docker-compose -f docker-compose.simple.yml stop nginx
 
-# Create nginx config directory
+# Create nginx config directory and clean conflicting configs
 sudo mkdir -p /etc/nginx/conf.d
+sudo rm -f /etc/nginx/sites-enabled/restaurant-web 2>/dev/null || true
+sudo rm -f /etc/nginx/conf.d/restaurant.conf 2>/dev/null || true
 
 # Create temporary nginx config for HTTP (for SSL verification)
+echo "   Creating temporary nginx config for SSL verification..."
 sudo tee /etc/nginx/conf.d/restaurant.conf > /dev/null <<EOF
 server {
     listen 80;
@@ -154,6 +157,7 @@ if sudo certbot certonly --webroot \
     -w /var/www/html \
     -d $DOMAIN \
     -d xn--elfogndedonsoto-zrb.com \
+    --expand \
     --non-interactive \
     --agree-tos \
     --email admin@$DOMAIN; then
@@ -162,9 +166,15 @@ if sudo certbot certonly --webroot \
 else
     echo "   ⚠️ SSL certificate generation failed"
     echo "   Checking if certificates already exist..."
+    # Check both possible certificate locations
     if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-        echo "   ✅ Existing certificate found, continuing..."
+        echo "   ✅ Certificate found at $DOMAIN location"
         SSL_CERT_OK=true
+    elif [ -f "/etc/letsencrypt/live/xn--elfogndedonsoto-zrb.com/fullchain.pem" ]; then
+        echo "   ✅ Certificate found at xn--elfogndedonsoto-zrb.com location"
+        SSL_CERT_OK=true
+        # Update DOMAIN for nginx config
+        CERT_DOMAIN="xn--elfogndedonsoto-zrb.com"
     else
         echo "   ❌ No certificate found, will continue without SSL"
         SSL_CERT_OK=false
@@ -174,7 +184,9 @@ fi
 # Create full nginx config (conditional SSL)
 echo "   Creating nginx configuration..."
 if [ "$SSL_CERT_OK" = true ]; then
-    echo "   Using HTTPS configuration"
+    # Use the correct certificate domain
+    CERT_DOMAIN=${CERT_DOMAIN:-$DOMAIN}
+    echo "   Using HTTPS configuration with certificate: $CERT_DOMAIN"
     sudo tee /etc/nginx/conf.d/restaurant.conf > /dev/null <<EOF
 # HTTP redirect to HTTPS
 server {
@@ -189,8 +201,8 @@ server {
     server_name $DOMAIN xn--elfogndedonsoto-zrb.com;
     
     # SSL Configuration
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/$CERT_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$CERT_DOMAIN/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     
@@ -364,8 +376,12 @@ fi
 # SSL check with details
 echo "   🔍 Checking SSL..."
 if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    echo "   ✅ SSL Certificate found"
+    echo "   ✅ SSL Certificate found at $DOMAIN"
     echo "   Certificate expires: $(sudo openssl x509 -enddate -noout -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem 2>/dev/null | cut -d= -f2 || echo 'Unable to read expiry')"
+    SSL_OK=true
+elif [ -f "/etc/letsencrypt/live/xn--elfogndedonsoto-zrb.com/fullchain.pem" ]; then
+    echo "   ✅ SSL Certificate found at xn--elfogndedonsoto-zrb.com"
+    echo "   Certificate expires: $(sudo openssl x509 -enddate -noout -in /etc/letsencrypt/live/xn--elfogndedonsoto-zrb.com/fullchain.pem 2>/dev/null | cut -d= -f2 || echo 'Unable to read expiry')"
     SSL_OK=true
 else
     echo "   ⚠️ SSL Certificate not found"
