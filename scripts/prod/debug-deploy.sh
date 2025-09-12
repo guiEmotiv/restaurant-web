@@ -192,7 +192,8 @@ echo "🐳 DOCKER BUILD"
 echo "=============="
 
 log "Building Docker images..."
-docker-compose -f docker-compose.production.yml build 2>&1 | tail -10
+echo "   This may take a few minutes..."
+docker-compose -f docker-compose.production.yml build 2>&1
 if [ $? -eq 0 ]; then
     success "Docker images built"
 else
@@ -211,7 +212,7 @@ echo "🗄️ DATABASE SETUP"
 echo "==============="
 
 log "Running migrations..."
-docker-compose -f docker-compose.production.yml run --rm restaurant-web-backend python manage.py migrate 2>&1 | tail -5
+docker-compose -f docker-compose.production.yml run --rm backend python manage.py migrate 2>&1
 if [ $? -eq 0 ]; then
     success "Migrations completed"
 else
@@ -223,7 +224,7 @@ docker-compose -f docker-compose.production.yml run --rm \
     -e DJANGO_SUPERUSER_USERNAME=admin \
     -e DJANGO_SUPERUSER_EMAIL=admin@restaurant.com \
     -e DJANGO_SUPERUSER_PASSWORD=admin123 \
-    restaurant-web-backend python manage.py shell -c "
+    backend python manage.py shell -c "
 from django.contrib.auth.models import User
 if not User.objects.filter(username='admin').exists():
     User.objects.create_superuser('admin', 'admin@restaurant.com', 'admin123')
@@ -233,7 +234,7 @@ else:
 " 2>&1
 
 log "Collecting static files..."
-docker-compose -f docker-compose.production.yml run --rm restaurant-web-backend python manage.py collectstatic --noinput 2>&1 | tail -3
+docker-compose -f docker-compose.production.yml run --rm backend python manage.py collectstatic --noinput 2>&1
 
 echo ""
 
@@ -245,6 +246,9 @@ echo "🚀 STARTING SERVICES"
 echo "=================="
 
 log "Starting containers..."
+echo "   Stopping any existing containers..."
+docker-compose -f docker-compose.production.yml down 2>/dev/null || true
+echo "   Starting new containers..."
 docker-compose -f docker-compose.production.yml up -d 2>&1
 if [ $? -eq 0 ]; then
     success "Containers started"
@@ -274,7 +278,7 @@ if curl -f -s http://localhost:8000/api/v1/health/ >/dev/null 2>&1; then
 else
     error "Backend NOT responding"
     log "Backend logs:"
-    docker-compose -f docker-compose.production.yml logs --tail=10 restaurant-web-backend
+    docker-compose -f docker-compose.production.yml logs --tail=10 backend
 fi
 
 # Check nginx/frontend
@@ -284,7 +288,7 @@ if curl -f -s http://localhost/ >/dev/null 2>&1; then
 else
     warning "Nginx/Frontend NOT responding at :80"
     log "Nginx logs:"
-    docker-compose -f docker-compose.production.yml logs --tail=10 restaurant-web-nginx
+    docker-compose -f docker-compose.production.yml logs --tail=10 nginx
 fi
 
 # Check port 80 usage
@@ -318,8 +322,12 @@ echo "   Password: admin123"
 echo ""
 echo "🔧 TROUBLESHOOTING COMMANDS:"
 echo "   View all logs: docker-compose -f docker-compose.production.yml logs"
-echo "   View backend logs: docker-compose -f docker-compose.production.yml logs restaurant-web-backend"
-echo "   View nginx logs: docker-compose -f docker-compose.production.yml logs restaurant-web-nginx"
+echo "   View backend logs: docker-compose -f docker-compose.production.yml logs backend"
+echo "   View nginx logs: docker-compose -f docker-compose.production.yml logs nginx"
+echo "   Container status: docker-compose -f docker-compose.production.yml ps"
+echo "   Restart services: docker-compose -f docker-compose.production.yml restart"
+echo "   Stop all: docker-compose -f docker-compose.production.yml down"
+echo "   Rebuild: docker-compose -f docker-compose.production.yml build --no-cache"
 echo "   Container status: docker-compose -f docker-compose.production.yml ps"
 echo "   Stop all: docker-compose -f docker-compose.production.yml down"
 echo ""
