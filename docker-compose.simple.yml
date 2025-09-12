@@ -4,7 +4,11 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.production
+      dockerfile: Dockerfile.simple
+      args:
+        - VITE_AWS_COGNITO_USER_POOL_ID=${VITE_AWS_COGNITO_USER_POOL_ID}
+        - VITE_AWS_COGNITO_APP_CLIENT_ID=${VITE_AWS_COGNITO_APP_CLIENT_ID}
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
     container_name: restaurant-backend
     env_file:
       - .env.production
@@ -15,9 +19,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./backend:/app/backend
       - ./frontend/dist:/app/frontend/dist
-    command: python manage.py runserver 0.0.0.0:8000
     restart: unless-stopped
 
   nginx:
