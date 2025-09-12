@@ -178,10 +178,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://xn--elfogndedonsoto-zrb.com",
     "http://localhost:5173",  # Vite dev server
     "http://127.0.0.1:5173",
+    "http://44.248.47.186",  # EC2 production IP
+    "https://44.248.47.186", # EC2 production IP with SSL
 ]
 
-# Allow all origins for API testing (can be restricted later)
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in DEBUG mode
+# Allow all origins for easier deployment (can be restricted later)
+CORS_ALLOW_ALL_ORIGINS = True  # Allow all origins in production for now
 CORS_ALLOW_CREDENTIALS = True
 
 # Allow specific headers
