@@ -218,14 +218,22 @@ server {
         add_header X-XSS-Protection "1; mode=block";
     }
     
-    # Backend API proxy
+    # Backend API proxy with detailed logging
     location /api/ {
+        # Log all API requests for debugging
+        access_log /var/log/nginx/api_access.log;
+        error_log /var/log/nginx/api_error.log debug;
+        
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host \$host;
+        
+        # Add debugging headers
+        add_header X-Debug-Proxy "backend-https" always;
+        add_header X-Backend-Host "127.0.0.1:8000" always;
     }
     
     # Django Admin
@@ -266,14 +274,22 @@ server {
         add_header X-XSS-Protection "1; mode=block";
     }
     
-    # Backend API proxy
+    # Backend API proxy with detailed logging
     location /api/ {
+        # Log all API requests for debugging
+        access_log /var/log/nginx/api_access.log;
+        error_log /var/log/nginx/api_error.log debug;
+        
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto http;
         proxy_set_header X-Forwarded-Host \$host;
+        
+        # Add debugging headers
+        add_header X-Debug-Proxy "backend-http" always;
+        add_header X-Backend-Host "127.0.0.1:8000" always;
     }
     
     # Django Admin
@@ -342,14 +358,31 @@ sudo netstat -tlnp | grep ":80\|:443\|:8000" || echo "   No processes found on p
 
 # Backend check with detailed output
 echo "   🔍 Testing backend..."
+echo "   Direct backend test (localhost:8000):"
 if curl -s http://localhost:8000/api/v1/health/ &>/dev/null; then
     echo "   ✅ Backend responding at localhost:8000"
+    echo "   Available endpoints:"
+    curl -s http://localhost:8000/api/v1/ | head -5 || echo "   Could not fetch API root"
     BACKEND_OK=true
 else
     echo "   ❌ Backend not responding"
     echo "   Backend logs (last 10 lines):"
     docker-compose -f docker-compose.simple.yml logs backend | tail -10
     BACKEND_OK=false
+fi
+
+# Test API proxy through nginx
+echo "   🔍 Testing API proxy through nginx..."
+if [ "$SSL_OK" = true ]; then
+    echo "   Testing HTTPS API proxy:"
+    curl -s -k -I https://localhost/api/v1/health/ | head -3 || echo "   HTTPS API proxy failed"
+    echo "   Testing specific dashboard endpoint:"
+    curl -s -k -I https://localhost/api/v1/dashboard/report/ | head -3 || echo "   Dashboard endpoint failed"
+else
+    echo "   Testing HTTP API proxy:"
+    curl -s -I http://localhost/api/v1/health/ | head -3 || echo "   HTTP API proxy failed"
+    echo "   Testing specific dashboard endpoint:"
+    curl -s -I http://localhost/api/v1/dashboard/report/ | head -3 || echo "   Dashboard endpoint failed"
 fi
 
 # Frontend check with detailed output
@@ -410,6 +443,29 @@ else
     echo "❌ FAILED"
     echo "   📋 Logs: docker-compose -f docker-compose.simple.yml logs"
 fi
+
+echo ""
+echo "📊 DEBUGGING INFORMATION"
+echo "======================"
+echo "   📋 Nginx API logs (last 5 lines):"
+sudo tail -5 /var/log/nginx/api_access.log 2>/dev/null || echo "   No API access logs yet"
+
+echo "   📋 Nginx error logs (last 5 lines):"
+sudo tail -5 /var/log/nginx/error.log 2>/dev/null || echo "   No nginx error logs"
+
+echo "   📋 Django logs from container (last 5 lines):"
+docker-compose -f docker-compose.simple.yml logs backend | tail -5
+
+echo "   📋 Active nginx configuration:"
+sudo nginx -T 2>/dev/null | grep -A 10 -B 5 "location /api/" || echo "   Could not read nginx config"
+
+echo ""
+echo "💡 DEBUGGING COMMANDS:"
+echo "   View API logs: sudo tail -f /var/log/nginx/api_access.log"
+echo "   View nginx errors: sudo tail -f /var/log/nginx/error.log" 
+echo "   View backend logs: docker-compose -f docker-compose.simple.yml logs -f backend"
+echo "   Test API directly: curl http://localhost:8000/api/v1/health/"
+echo "   Test API via nginx: curl -k https://localhost/api/v1/health/"
 
 echo ""
 echo "📊 Final disk: $(df -h . | tail -1 | awk '{print $4}') free"
