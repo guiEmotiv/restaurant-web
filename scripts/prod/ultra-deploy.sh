@@ -56,18 +56,36 @@ echo "   Environment variables set:"
 echo "     VITE_API_BASE_URL=$VITE_API_BASE_URL"
 echo "     DOMAIN=$DOMAIN"
 
-# Build with memory optimization
-echo "   npm install..."
-if NODE_OPTIONS='--max-old-space-size=512' npm install --prefer-offline; then
-    echo "   ✅ npm install successful"
+# Build with same configuration as development
+echo "   npm install (same as dev environment)..."
+
+# Check if we can reuse existing node_modules (speed optimization)
+if [ -d "node_modules" ] && [ -f "node_modules/.package-lock.json" ] && [ -n "$(find node_modules -maxdepth 0 -mtime -1 2>/dev/null)" ]; then
+    echo "   ⚡ Reusing existing node_modules (recent install)"
 else
-    echo "   ❌ npm install failed"
-    exit 1
+    echo "   📦 Fresh npm install needed..."
+    rm -rf node_modules package-lock.json &>/dev/null || true
+    
+    # Use same npm configuration as development (but suppress warnings for speed)
+    export NPM_CONFIG_LOGLEVEL=error  # Hide React warnings that slow down install
+    export NPM_CONFIG_PROGRESS=false  # No progress bars
+    export NPM_CONFIG_FUND=false      # Skip funding messages
+    export NPM_CONFIG_AUDIT=false     # Skip audit (faster)
+    
+    # Install with timeout - warnings are OK, hanging is not
+    echo "   Installing with 5-minute timeout (React 19 warnings are normal)..."
+    if timeout 300 npm install --legacy-peer-deps; then
+        echo "   ✅ npm install completed (warnings ignored)"
+    else
+        echo "   ⚠️ npm install timed out, trying one more time..."
+        npm install --legacy-peer-deps --force
+    fi
 fi
 
-echo "   npm build (with detailed output)..."
-if NODE_OPTIONS='--max-old-space-size=512' npm run build; then
-    echo "   ✅ npm build successful"
+echo "   🏗️ Building with production settings (from package.json)..."
+# Use the exact build:prod script from package.json (2048MB memory)
+if npm run build:prod; then
+    echo "   ✅ npm build:prod successful"
 else
     echo "   ❌ npm build failed"
     npm run build  # Show errors
@@ -105,12 +123,12 @@ cd ..
 echo "🐳 Building containers..."
 mkdir -p data
 
-# Build only backend (much faster)
-echo "   Building backend container..."
-docker-compose -f docker-compose.simple.yml build --no-cache backend &>/dev/null
+# Use the simplified docker-compose.production.yml (much faster)
+echo "   Building containers with simplified config..."
+docker-compose -f docker-compose.production.yml build --no-cache &>/dev/null
 
 echo "   Starting services..."
-docker-compose -f docker-compose.simple.yml up -d &>/dev/null
+docker-compose -f docker-compose.production.yml up -d &>/dev/null
 
 echo "   Waiting 10 seconds..."
 sleep 10

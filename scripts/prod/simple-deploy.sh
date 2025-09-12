@@ -1,258 +1,80 @@
 #!/bin/bash
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🚀 RESTAURANT WEB - ULTRA SIMPLE DEPLOY (NO DOCKER)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 set -e
 
-echo "🚀 ULTRA SIMPLE DEPLOYMENT"
+echo "🚀 SIMPLE PRODUCTION DEPLOY"
 echo "=========================="
-echo "📁 Project: $(pwd)"
-echo ""
 
 # Get server IP
 SERVER_IP=$(curl -s https://ipinfo.io/ip 2>/dev/null || echo "44.248.47.186")
+echo "📍 Server: $SERVER_IP"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🧹 CLEANUP
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+# Cleanup
 echo "🧹 Cleanup..."
-sudo systemctl stop nginx || true
-sudo pkill -f "python manage.py runserver" || true
-sudo pkill -f "npm run" || true
-docker-compose down || true
-sudo rm -rf frontend/node_modules frontend/dist || true
+docker system prune -af --volumes &>/dev/null || true
+sudo rm -rf frontend/node_modules frontend/dist &>/dev/null || true
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 📦 INSTALL MINIMAL TOOLS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-echo "📦 Installing tools..."
-
-# Node.js
-if ! command -v node &>/dev/null; then
-    echo "   Installing Node.js 18..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-fi
-
-# Python3 venv
-if ! python3 -c "import venv" &>/dev/null; then
-    echo "   Installing Python venv..."
-    sudo apt-get update
-    sudo apt-get install -y python3-venv python3-pip
-fi
-
-# Nginx
-if ! command -v nginx &>/dev/null; then
-    echo "   Installing Nginx..."
-    sudo apt-get install -y nginx
-fi
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🏗️ BUILD FRONTEND
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+# Build frontend with fixed React version issues
 echo "🏗️ Building frontend..."
 cd frontend
 
-echo "   Installing dependencies..."
-NODE_OPTIONS='--max-old-space-size=512' npm install --prefer-offline
-
-# Set environment variables
-export VITE_API_BASE_URL="http://$SERVER_IP:8000/api/v1"
+# Set environment for HTTPS
+export VITE_API_BASE_URL="https://www.xn--elfogndedonsoto-zrb.com/api/v1"
 export VITE_AWS_REGION="us-west-2"
 export VITE_AWS_COGNITO_USER_POOL_ID="us-west-2_bdCwF60ZI"
 export VITE_AWS_COGNITO_APP_CLIENT_ID="4i9hrd7srgbqbtun09p43ncfn0"
-export VITE_NODE_ENV="production"
 
-echo "   Building..."
+# Fast npm install with fixed dependencies
+rm -rf node_modules package-lock.json &>/dev/null || true
+NODE_OPTIONS='--max-old-space-size=512' npm install --legacy-peer-deps --no-audit --no-fund
+
+# Build
 NODE_OPTIONS='--max-old-space-size=512' npm run build
 
-if [ -f "dist/index.html" ]; then
-    echo "   ✅ Frontend built"
-else
-    echo "   ❌ Frontend build failed"
+# Verify build
+if [ ! -f "dist/index.html" ]; then
+    echo "❌ Build failed - no index.html"
     exit 1
 fi
 
+echo "✅ Frontend built: $(du -sh dist)"
 cd ..
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🐍 SETUP BACKEND
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Start with simplified docker-compose
+echo "🐳 Starting containers..."
+mkdir -p data
+docker-compose -f docker-compose.production.yml down &>/dev/null || true
+docker-compose -f docker-compose.production.yml up -d --build
 
-echo "🐍 Setting up backend..."
-cd backend
-
-# Create virtual environment if it doesn't exist
-if [ ! -d "venv" ]; then
-    echo "   Creating virtual environment..."
-    python3 -m venv venv
-fi
-
-echo "   Activating virtual environment..."
-source venv/bin/activate
-
-echo "   Installing Python dependencies..."
-pip install --upgrade pip
-pip install -r requirements.txt
-
-echo "   Running migrations..."
-python manage.py migrate --noinput
-
-echo "   Creating admin user..."
-python manage.py shell -c "
-from django.contrib.auth.models import User
-if not User.objects.filter(username='admin').exists():
-    User.objects.create_superuser('admin', 'admin@restaurant.com', 'admin123')
-    print('Admin user created')
-else:
-    print('Admin user exists')
-" || true
-
-echo "   Collecting static files..."
-python manage.py collectstatic --noinput
-
-cd ..
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🌐 CONFIGURE NGINX
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-echo "🌐 Configuring Nginx..."
-
-# Create nginx config
-sudo tee /etc/nginx/sites-available/restaurant-web > /dev/null <<EOF
-server {
-    listen 80;
-    server_name $SERVER_IP;
-    
-    # Frontend
-    location / {
-        root $(pwd)/frontend/dist;
-        index index.html;
-        try_files \$uri \$uri/ /index.html;
-    }
-    
-    # Backend API
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    
-    # Django Admin
-    location /admin/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    
-    # Static files
-    location /static/ {
-        alias $(pwd)/backend/staticfiles/;
-    }
-}
-EOF
-
-# Enable site
-sudo ln -sf /etc/nginx/sites-available/restaurant-web /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-
-# Test and reload nginx
-sudo nginx -t
-sudo systemctl reload nginx
-sudo systemctl enable nginx
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🚀 START SERVICES
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-echo "🚀 Starting Django backend..."
-
-# Create systemd service for Django
-sudo tee /etc/systemd/system/restaurant-backend.service > /dev/null <<EOF
-[Unit]
-Description=Restaurant Backend
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=$(pwd)/backend
-Environment=PATH=$(pwd)/backend/venv/bin
-ExecStart=$(pwd)/backend/venv/bin/python manage.py runserver 0.0.0.0:8000
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Start services
-sudo systemctl daemon-reload
-sudo systemctl enable restaurant-backend
-sudo systemctl start restaurant-backend
-
-# Wait a moment
-sleep 5
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ✅ VERIFICATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-echo "✅ Checking services..."
+echo "⏳ Waiting for containers..."
+sleep 15
 
 # Check backend
-if curl -s http://localhost:8000/api/v1/health/ >/dev/null 2>&1; then
+echo "🔍 Testing backend..."
+if curl -s http://localhost:8000/api/v1/health/ &>/dev/null; then
     echo "✅ Backend OK"
-    BACKEND_OK=true
 else
     echo "❌ Backend failed"
-    BACKEND_OK=false
+    docker-compose -f docker-compose.production.yml logs backend | tail -10
+    exit 1
 fi
 
-# Check frontend through nginx
-if curl -s http://localhost/ >/dev/null 2>&1; then
+# Check frontend via nginx
+echo "🔍 Testing frontend..."
+if curl -s http://localhost/ &>/dev/null; then
     echo "✅ Frontend OK"
-    FRONTEND_OK=true
 else
     echo "❌ Frontend failed"
-    FRONTEND_OK=false
+    docker-compose -f docker-compose.production.yml logs nginx | tail -10
 fi
 
 echo ""
-echo "🎉 DEPLOYMENT COMPLETE!"
-echo "======================"
-
-if [ "$BACKEND_OK" = true ] && [ "$FRONTEND_OK" = true ]; then
-    echo "✅ SUCCESS!"
-    echo ""
-    echo "🌐 Your app is running at:"
-    echo "   Frontend: http://$SERVER_IP"
-    echo "   Admin: http://$SERVER_IP/admin (admin/admin123)"
-    echo "   API: http://$SERVER_IP/api/v1/"
-else
-    echo "⚠️ PARTIAL SUCCESS"
-    echo ""
-    echo "🔧 Check logs:"
-    echo "   Backend: sudo systemctl status restaurant-backend"
-    echo "   Backend logs: sudo journalctl -u restaurant-backend -f"
-    echo "   Nginx: sudo systemctl status nginx"
-fi
-
+echo "🎉 DEPLOY COMPLETE!"
+echo "=================="
+echo "🌐 Website: http://$SERVER_IP/"
+echo "🔧 Backend: http://$SERVER_IP:8000/"
+echo "🔐 Admin: http://$SERVER_IP:8000/admin (admin/admin123)"
 echo ""
-echo "🔧 Management commands:"
-echo "   Restart backend: sudo systemctl restart restaurant-backend"
-echo "   Restart nginx: sudo systemctl restart nginx"
-echo "   View backend logs: sudo journalctl -u restaurant-backend -f"
-echo "   Stop all: sudo systemctl stop restaurant-backend nginx"
+echo "📊 Status:"
+docker-compose -f docker-compose.production.yml ps
 echo ""
-echo "⚡ Simple deploy completed!"
+echo "💡 To check logs: docker-compose -f docker-compose.production.yml logs -f"
