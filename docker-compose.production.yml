@@ -1,5 +1,5 @@
 services:
-  restaurant-web-backend:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile.production
@@ -7,80 +7,33 @@ services:
         - VITE_AWS_COGNITO_USER_POOL_ID=${VITE_AWS_COGNITO_USER_POOL_ID}
         - VITE_AWS_COGNITO_APP_CLIENT_ID=${VITE_AWS_COGNITO_APP_CLIENT_ID}
         - VITE_API_BASE_URL=${VITE_API_BASE_URL}
-    container_name: ${DOCKER_PROJECT_NAME:-restaurant-web}-backend-${CONTAINER_SUFFIX:-prod}
+    container_name: restaurant-backend
     env_file:
       - .env.production
     environment:
       - ENVIRONMENT=production
       - DJANGO_SETTINGS_MODULE=backend.settings
-      - PRINTER_SECRET=restaurant-elfogon-2024-x9k2m7p4
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
-      - restaurant-data:/app/data
-      - restaurant-staticfiles:/app/staticfiles
-      - restaurant-frontend:/app/frontend/dist
-      - restaurant-logs:/app/logs
-    networks:
-      - restaurant-network
+      - ./data:/app/data
+      - ./backend:/app/backend
+      - ./frontend/dist:/app/frontend/dist
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py runserver 0.0.0.0:8000"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
-      interval: 60s
-      timeout: 30s
-      retries: 5
-      start_period: 120s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '0.5'
-        reservations:
-          memory: 512M
-          cpus: '0.25'
 
-  restaurant-web-nginx:
+  nginx:
     image: nginx:alpine
-    container_name: ${DOCKER_PROJECT_NAME:-restaurant-web}-nginx-${CONTAINER_SUFFIX:-prod}
+    container_name: restaurant-nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
+      - ./frontend/dist:/usr/share/nginx/html
       - ./docker/nginx/conf.d:/etc/nginx/conf.d
-      - restaurant-staticfiles:/var/www/static
-      - restaurant-frontend:/usr/share/nginx/html
       - ./docker/nginx/ssl:/etc/nginx/ssl
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      - /var/www/certbot:/var/www/certbot
-    networks:
-      - restaurant-network
     depends_on:
-      - restaurant-web-backend
+      - backend
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-volumes:
-  restaurant-data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${PWD}/data
-
-  restaurant-staticfiles:
-    driver: local
-
-  restaurant-frontend:
-    driver: local
-
-  restaurant-logs:
-    driver: local
-
-networks:
-  restaurant-network:
-    driver: bridge
-    name: ${DOCKER_PROJECT_NAME:-restaurant-web}-network-${CONTAINER_SUFFIX:-prod}
+# Simplified - using bind mounts instead of named volumes for easier management
