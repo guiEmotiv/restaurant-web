@@ -2,24 +2,15 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.production
-      args:
-        - VITE_AWS_COGNITO_USER_POOL_ID=${VITE_AWS_COGNITO_USER_POOL_ID}
-        - VITE_AWS_COGNITO_APP_CLIENT_ID=${VITE_AWS_COGNITO_APP_CLIENT_ID}
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
+      dockerfile: Dockerfile.ultra
     container_name: restaurant-backend
-    env_file:
-      - .env.production
     environment:
-      - ENVIRONMENT=production
       - DJANGO_SETTINGS_MODULE=backend.settings
+      - ENVIRONMENT=production
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./backend:/app/backend
-      - ./frontend/dist:/app/frontend/dist
-    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py runserver 0.0.0.0:8000"
     restart: unless-stopped
 
   nginx:
@@ -27,13 +18,6 @@ services:
     container_name: restaurant-nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./frontend/dist:/usr/share/nginx/html
-      - ./docker/nginx/conf.d:/etc/nginx/conf.d
-      - ./docker/nginx/ssl:/etc/nginx/ssl
-    depends_on:
-      - backend
     restart: unless-stopped
-
-# Simplified - using bind mounts instead of named volumes for easier management
